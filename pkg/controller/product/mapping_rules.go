@@ -19,10 +19,12 @@ type mappingRuleData struct {
 func (t *ThreescaleReconciler) syncMappingRules(_ interface{}) error {
 	desiredKeys := make([]string, 0, len(t.resource.Spec.MappingRules))
 	desiredMap := map[string]capabilitiesv1beta1.MappingRuleSpec{}
-	for _, spec := range t.resource.Spec.MappingRules {
+	desiredPositionMap := map[string]int{}
+	for idx, spec := range t.resource.Spec.MappingRules {
 		key := fmt.Sprintf("%s:%s", spec.HTTPMethod, spec.Pattern)
 		desiredKeys = append(desiredKeys, key)
 		desiredMap[key] = spec
+		desiredPositionMap[key] = idx
 	}
 
 	existingKeys := []string{}
@@ -68,7 +70,7 @@ func (t *ThreescaleReconciler) syncMappingRules(_ interface{}) error {
 		})
 	}
 
-	err = t.reconcileMatchedMappingRules(matchedList)
+	err = t.reconcileMatchedMappingRules(matchedList, desiredPositionMap)
 	if err != nil {
 		return fmt.Errorf("Error sync product [%s] mappingrules: %w", t.resource.Spec.SystemName, err)
 	}
@@ -85,7 +87,7 @@ func (t *ThreescaleReconciler) syncMappingRules(_ interface{}) error {
 		// desiredNewKeys is a subset of the desiredKeys set
 		desiredNewList = append(desiredNewList, desiredMap[key])
 	}
-	err = t.createNewMappingRules(desiredNewList)
+	err = t.createNewMappingRules(desiredNewList, desiredPositionMap)
 	if err != nil {
 		return fmt.Errorf("Error sync product [%s] mappingrules: %w", t.resource.Spec.SystemName, err)
 	}
@@ -103,7 +105,7 @@ func (t *ThreescaleReconciler) processNotDesiredMappingRules(notDesiredList []th
 	return nil
 }
 
-func (t *ThreescaleReconciler) reconcileMatchedMappingRules(matchedList []mappingRuleData) error {
+func (t *ThreescaleReconciler) reconcileMatchedMappingRules(matchedList []mappingRuleData, desiredPositionMap map[string]int) error {
 	for _, data := range matchedList {
 		params := threescaleapi.Params{}
 
@@ -131,6 +133,18 @@ func (t *ThreescaleReconciler) reconcileMatchedMappingRules(matchedList []mappin
 			params["delta"] = strconv.Itoa(data.spec.Increment)
 		}
 
+		//
+		// Reconcile Position
+		//
+		mappingRuleKey := fmt.Sprintf("%s:%s", data.spec.HTTPMethod, data.spec.Pattern)
+		desiredPosition, foundInDesiredPositionMap := desiredPositionMap[mappingRuleKey]
+		if !foundInDesiredPositionMap {
+			return fmt.Errorf("MappingRule key '%s' not found in desiredPositionMap", mappingRuleKey)
+		}
+		if desiredPosition != data.item.Position {
+			params["position"] = strconv.FormatInt(int64(desiredPosition), 10)
+		}
+
 		if len(params) > 0 {
 			err := t.productEntity.UpdateMappingRule(data.item.ID, params)
 			if err != nil {
@@ -142,7 +156,7 @@ func (t *ThreescaleReconciler) reconcileMatchedMappingRules(matchedList []mappin
 	return nil
 }
 
-func (t *ThreescaleReconciler) createNewMappingRules(desiredList []capabilitiesv1beta1.MappingRuleSpec) error {
+func (t *ThreescaleReconciler) createNewMappingRules(desiredList []capabilitiesv1beta1.MappingRuleSpec, desiredPositionMap map[string]int) error {
 	for _, spec := range desiredList {
 		metricID, err := t.productEntity.FindMethodMetricIDBySystemName(spec.MetricMethodRef)
 		if err != nil {
@@ -160,6 +174,15 @@ func (t *ThreescaleReconciler) createNewMappingRules(desiredList []capabilitiesv
 			"metric_id":   strconv.FormatInt(metricID, 10),
 			"delta":       strconv.Itoa(spec.Increment),
 		}
+
+		// Set MappingRule position as the position of the MappingRule in
+		// the MappingRules array defined in Spec
+		mappingRuleKey := fmt.Sprintf("%s:%s", spec.HTTPMethod, spec.Pattern)
+		desiredPosition, foundInDesiredPositionMap := desiredPositionMap[mappingRuleKey]
+		if !foundInDesiredPositionMap {
+			return fmt.Errorf("MappingRule key '%s' not found in desiredPositionMap", mappingRuleKey)
+		}
+		params["position"] = strconv.FormatInt(int64(desiredPosition), 10)
 
 		err = t.productEntity.CreateMappingRule(params)
 		if err != nil {

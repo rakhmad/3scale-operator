@@ -158,6 +158,8 @@ type MappingRuleSpec struct {
 	Pattern         string `json:"pattern"`
 	MetricMethodRef string `json:"metricMethodRef"`
 	Increment       int    `json:"increment"`
+	// TODO remove Position parameter as it's automatically derived from the array
+	// where it is located?
 	// +optional
 	Position *int `json:"position,omitempty"`
 }
